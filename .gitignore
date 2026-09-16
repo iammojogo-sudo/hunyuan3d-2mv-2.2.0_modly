@@ -4,6 +4,7 @@ venv/
 # Python
 __pycache__/
 *.py[cod]
+!custom_rasterizer/*.pyd
 *.egg-info/
 build/
 dist/
