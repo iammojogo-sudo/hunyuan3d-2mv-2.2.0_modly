@@ -20,7 +20,7 @@ Generate textured 3D meshes from images using Tencent's Hunyuan3D-2mv. Three nod
 ### What was new in v2.0
 - **Automatic background removal** — rembg runs on every input image before processing. No toggle needed.
 - **Image Folder mode** — point to a folder of photos; filenames (`front`, `left`, `back`, `right`) determine grid placement. Auto-tiles and saves `folder_tiled.png` for reuse.
-- **Hybrid Reference Mode** — bakes your real reference pixels onto front/left/back/right via a smooth thin-plate-spline silhouette warp and only synthesizes top/bottom with diffusion. Best with orthographic/isometric references (e.g. the MV-Adapter grid).
+- **Hybrid texture method** — bakes real reference pixels onto the views they cover via a smooth thin-plate-spline silhouette warp and uses diffusion for uncovered views. Best with orthographic/isometric references (e.g. the MV-Adapter grid).
 - **Delight toggle** — turn off to skip the delight model (~1.5 GB VRAM saved) and keep original colors.
 - **Progress tracking** — multiview diffusion step progress shown in the node status.
 - **Debug views** — per-view split outputs saved to a `views_split` folder for troubleshooting.
@@ -31,7 +31,7 @@ Generate textured 3D meshes from images using Tencent's Hunyuan3D-2mv. Three nod
 
 ## Updating / Installing from GitHub
 
-This repo is the canonical source: `https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.1_modly`
+This repo is the canonical source: `https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.0.1_modly`
 
 1. **Add the extension in Modly's Extensions tab** (paste the repo URL) — Modly downloads it and re-runs `setup.py`, which installs every dependency (torch, hy3dgen, rembg, …) into the isolated venv. No git CLI or manual dependency steps are needed.
 2. **Download the model weights** in the Extensions → model view (per-node **Download** button) — ~15 GB total from public Hugging Face repos.
@@ -40,7 +40,7 @@ This repo is the canonical source: `https://github.com/iammojogo-sudo/hunyuan3d-
 For a manual install:
 
 ```
-pip install https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.1_modly/archive/refs/heads/main.zip
+pip install https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.0.1_modly/archive/refs/heads/main.zip
 ```
 
 install_requires covers every runtime dependency (use the CUDA torch wheel separately on GPU machines).
@@ -50,7 +50,7 @@ install_requires covers every runtime dependency (use the CUDA torch wheel separ
 All input images automatically have their background removed via rembg before being fed to the mesh or texture pipeline. This happens for every input mode:
 
 - **Single / Tiled mode:** rembg runs on the wired image before splitting or forwarding.
-- **Folder mode:** rembg runs on each individual file in the folder before padding/tiling. Intermediate files (`rembg_*.png`, `padded_*.png`) are saved in the source folder.
+- **Folder mode:** rembg runs on each individual file in the folder before padding/tiling. Intermediate files (`rembg_*.png`, `padded_*.png`) are saved in the current Modly run folder.
 
 Background removal uses a dedicated Python venv and the ONNX Runtime runs on CPU to avoid CUDA conflicts with PyTorch.
 
@@ -64,10 +64,12 @@ Both nodes accept images in three ways. Select via the **Image Input Mode** drop
 Wire in **one photo** of your subject. The whole image is used as a single front view. Best for when you only have one angle of the object.
 
 ### Tiled Image — `input_mode: tiled`
-Wire in a **pre-made 2×2 grid** image (front top-left, left top-right, back bottom-left, right bottom-right). The bridge auto-splits it into 1–4 views. This is the original/default mode.
+Wire in a pre-made grid image. A 2×2 grid uses front, left, back, right; a
+2×3 or 3×2 grid can provide front, left, back, right, top, bottom. The bridge
+auto-detects the layout from the image aspect ratio.
 
 ### Image Folder — `input_mode: folder`
-Put your photos in a folder, paste the folder path into the **Image Folder** field (or use the folder picker). The extension auto-tiles up to 4 images into a 2×2 grid and saves the composite (`folder_tiled.png`) to the run folder for reuse.
+Put your photos in a folder, paste the folder path into the **Image Folder** field (or use the folder picker). The extension auto-tiles up to 6 images into a 2×2 grid for up to 4 views or a 2×3 grid for 5-6 views, then saves the composite (`folder_tiled.png`) to the run folder for reuse.
 
 **Folder naming guide:** The extension reads filenames to place them in the correct grid position:
 | Filename contains | Grid position |
@@ -89,18 +91,18 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 3. Set **Input Views** → `1 view (front)`
 4. Click Generate — background removed automatically
 
-### Method B: Wire a tiled 2×2 image
-1. Create a 2×2 grid image (front/left/back/right in reading order)
+### Method B: Wire a tiled image
+1. Create a 2×2, 2×3, or 3×2 grid image in reading order
 2. Wire it into **Generate 3D Mesh**
 3. Set **Image Input Mode** → `Tiled Image`
-4. Set **Input Views** → how many views to use (1–4)
+4. Set **Input Views** → how many views to use (1–6)
 5. Click Generate
 
 ### Method C: Use a folder of images
-1. Place 1–4 photos in a folder (name them with `front`, `left`, `back`, `right` in the filename)
+1. Place 1–6 photos in a folder (name them with `front`, `left`, `back`, `right`, `top`, or `bottom` in the filename)
 2. Set **Image Input Mode** → `Image Folder`
 3. Paste the folder path into **Image Folder** or use the folder picker
-4. Set **Input Views** → how many views to use
+4. Set **Input Views** → how many views to use (1–6)
 5. Click Generate — the composite tile (`folder_tiled.png`) is saved in the run folder for later use
 
 ### Key Parameters
@@ -110,7 +112,7 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 | **Quality Steps** | Number of shape-generation diffusion steps (1-60). 5-10 = turbo fast, 30 = standard high quality |
 | **Mesh Resolution** | Lower = coarser mesh, less VRAM. 128–256 for 6GB cards, 380+ for 12GB+ |
 | **Dual Guidance** | On = best quality but 3× slower. Off = faster, slight quality loss |
-| **Input Views** | How many of the 4 views to actually feed the model |
+| **Input Views** | How many of the 1-6 available views to feed the model |
 | **Image Input Mode** | Single / Tiled / Folder — how to interpret the input |
 
 ---
@@ -122,10 +124,10 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 3. Wire reference image(s) into the second input
 4. Set **Image Input Mode**:
    - `Single Image` — one reference photo
-   - `Tiled Image` — a 2×2 tile with up to 4 reference views
+   - `Tiled Image` — a 2×2, 2×3, or 3×2 tile with up to 6 reference views
    - `Image Folder` — folder of reference photos (auto-tiled)
 5. Set **Reference Images** to how many views to use for conditioning
-6. Set **Reference Mode**:
+6. Set **Texture Method**:
    - `Diffusion` — multiview model generates all 6 views (smoother on spheres/organic shapes)
    - `Hybrid` — bakes your real reference pixels onto the views they cover (thin-plate-spline silhouette warp at full resolution) and synthesizes the rest with diffusion. Sharper on hard-surface objects; best with orthographic/isometric references like the MV-Adapter grid. Single photos are fine too — only the front view uses the photo, the rest come from diffusion.
 7. Set **Delight**:
@@ -140,11 +142,33 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 |-----------|-------------|
 | **Texture Resolution** | Higher = sharper but more VRAM. 1024 is the sweet spot |
 | **Decimate Faces** | Reduces mesh face count before UV unwrap. Lower = faster, less VRAM |
-| **Reference Images** | 1–6 real views wired in (front, left, back, right, top, bottom). Only the front view conditions the diffusion model (its trained mode); the rest are used directly in Hybrid/Deform bakes |
-| **Reference Mode** | Diffusion = model generates every view from the front ref; Hybrid = real pixels on covered views + diffusion for the rest (best with orthographic MV-Adapter refs) |
+| **Reference Images** | 1–6 real views wired in (front, left, back, right, top, bottom). The front view conditions diffusion; Hybrid also uses the other supplied views directly in the texture bake |
+| **Texture Method** | Diffusion = model generates every view from the front ref; Hybrid = real pixels on covered views + diffusion for the rest (best with orthographic MV-Adapter refs). The retired `deform` value is treated as `hybrid`. |
 | **Delight** | Off = keep real colors (saves ~1.5 GB VRAM). On = normalize lighting |
 | **Texture Diffusion Steps** | Number of multiview diffusion steps for texture generation (5-60). 5 = fast/rough, 30 = default, 60 = slow/sharp |
 | **Image Input Mode** | Single / Tiled / Folder |
+
+---
+
+## Step-by-Step: Apply Texture
+
+Use **Apply Texture** when the mesh already has UV coordinates and you have an
+albedo texture or a complete PBR texture set. This node does not load diffusion
+models and does not perform a bake.
+
+1. Wire a UV'd mesh into **Apply Texture**.
+2. For **Albedo Source = Wired image**, wire the albedo image into the image
+   input.
+3. For **Albedo Source = Folder**, set **Texture Folder** to the folder that
+   contains the maps.
+4. Select `Albedo` to apply only the albedo, or `PBR` to also load optional
+   normal, roughness, and metallic maps.
+5. Adjust normal scale, normal Y flipping, and smooth normals if needed.
+
+When scanning a folder, the node recognizes `texturemap` for albedo,
+`normalmap`, `roughnessmap`, and `metallicmap`. Missing optional maps are
+skipped. A mesh without UVs must go through **Texture Mesh** or another UV
+unwrap tool first.
 
 ---
 
@@ -167,7 +191,7 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 ### Texture bake fails / black mesh
 - Wire at least one image to the Texture Mesh node
 - Try **Reference Images** = 1 first, then increase
-- Check that background was cleanly removed (remrg runs automatically)
+- Check that background was cleanly removed (rembg runs automatically)
 
 ### CUDA out of memory
 - Lower **Mesh Resolution** to 128 or 64
@@ -180,4 +204,7 @@ If filenames don't contain any of these keywords, they fill remaining slots alph
 Kill lingering Python processes in Task Manager and restart Modly. If persistent, your GPU driver may need a reboot.
 
 ### Images placed in wrong grid position
-In **Image Folder** mode, name your files with `front`, `left`, `back`, `right` in the filename (e.g., `myobject_front.png`). The extension reads these keywords to place them correctly.
+In **Image Folder** mode, name your files with `front`, `left`, `back`,
+`right`, `top`, or `bottom` in the filename (for example,
+`myobject_front.png`). The extension reads these keywords to place them
+correctly.
