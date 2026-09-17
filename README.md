@@ -43,6 +43,19 @@ The CUDA Toolkit is required to build the rasterizer, not to run it after the bu
 
 If setup reports that `nvcc` or a C++ compiler is missing, install the prerequisites above and reinstall the extension. Setup detects the GPU capability, builds `custom_rasterizer_kernel`, and copies the resulting `.pyd` into the extension's virtual environment.
 
+### GPU Architecture Support
+
+The installer chooses the PyTorch CUDA wheel from the GPU's compute capability, not only from the installed driver version:
+
+| Compute capability | Typical GPU families | Installer path |
+|---|---|---|
+| `sm_20`–`sm_37` | Fermi / Kepler | Unsupported |
+| `sm_50`–`sm_62` | Maxwell / Pascal | PyTorch CUDA 12.4 |
+| `sm_70`–`sm_90` | Volta / Turing / Ampere / Ada / Hopper | PyTorch CUDA 12.4 |
+| `sm_100` / `sm_120` | Blackwell | PyTorch CUDA 12.8 |
+
+Hunyuan3D also needs approximately 6 GB or more of VRAM in practice; a GPU may be CUDA-compatible but still run out of memory during generation.
+
 ## Updating / Installing from GitHub
 
 This repo is the canonical source: `https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.0.1_modly`

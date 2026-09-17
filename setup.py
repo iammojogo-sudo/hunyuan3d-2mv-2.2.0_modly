@@ -180,7 +180,10 @@ def _torch_index_and_pkgs(gpu_sm: int, cuda_version: int, torch_flavor: str, is_
         if is_win:
             return "https://download.pytorch.org/whl/cpu", ["torch==2.6.0", "torchvision==0.21.0"]
         return "https://download.pytorch.org/whl/rocm7.2", ["torch", "torchvision", "torchaudio"]
-    if gpu_sm >= 100 or cuda_version >= 128:
+    # Select the wheel from the GPU architecture, not the driver's reported
+    # CUDA version. A CUDA 12.8 driver can still be paired with an older
+    # Maxwell/Pascal GPU, and the cu128 torch builds do not include those SMs.
+    if gpu_sm >= 100:
         return "https://download.pytorch.org/whl/cu128", ["torch==2.7.0", "torchvision==0.22.0", "torchaudio==2.7.0"]
     if gpu_sm >= 70:
         return "https://download.pytorch.org/whl/cu124", ["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"]
