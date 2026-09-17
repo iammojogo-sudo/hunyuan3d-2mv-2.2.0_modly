@@ -4,7 +4,7 @@
   "type": "model",
   "source": "https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.1_modly",
   "description": "Multi-view to 3D mesh generation using Hunyuan3D-2mv. Takes a tiled image of orthographic views (up to 6: front, left, back, right, top, bottom) and outputs a 3D GLB mesh. Texture is a separate node.",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "author": "iammojogo",
   "generator_class": "Hunyuan3DmvGenerator",
   "tags": [

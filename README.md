@@ -1,4 +1,4 @@
-# Hunyuan3D-2mv — Modly Extension (v2.1)
+# Hunyuan3D-2mv — Modly Extension (v2.2)
 
 Generate textured 3D meshes from images using Tencent's Hunyuan3D-2mv. Three nodes:
 
@@ -8,12 +8,13 @@ Generate textured 3D meshes from images using Tencent's Hunyuan3D-2mv. Three nod
 | **Texture Mesh** | Paints a texture onto an existing mesh using reference photos |
 | **Apply Texture** | Maps an existing UV atlas (e.g. externally super-resolved) onto a UV'd mesh — no diffusion |
 
-### What's new in v2.1
+### What's new in v2.2
 - **Self-contained install** — `setup.py` now installs *every* runtime dependency (torch + hy3dgen + scipy + scikit-image + onnxruntime + rembg + trimesh + …) into the isolated venv, including a `pip install .` packaging mode for GitHub users. No manual dependency steps.
+- **Machine-specific CUDA rasterizer** — the texture renderer is compiled during installation for the detected NVIDIA GPU instead of shipping a binary for one fixed GPU architecture. The generated `.pyd` is stored in the extension and copied into its venv.
 - **Weights stay in Modly** — all model weights are still downloaded through the extension's nodes in Modly's **Extensions → model** view (per-node `hf_repo` / download check). Nothing model-related ships in the repo.
 - **First-load bridge** — new `hunyuan3d_bootstrap.py` runs on first load after install/download and bridges anything living *outside* the extension dir:
   - weights Modly placed in any node model dir / HF hub cache are hardlinked into the layout the pipeline expects (instant, zero extra disk, fully offline afterwards),
-  - the venv's `custom_rasterizer` CUDA kernel is re-installed from the bundled build if missing/stale,
+  - the venv's machine-specific `custom_rasterizer` CUDA kernel is re-installed if missing/stale,
   - a state file (`.bridge_state.json`, gitignored) makes every later run a no-op.
 - **Bridges stay authoritative** — both generation bridges (shape + texture) re-run the (idempotent) first-load bridge right before loading models, so any change since the last run is patched into out-of-extension files automatically on the first generate.
 
@@ -29,13 +30,27 @@ Generate textured 3D meshes from images using Tencent's Hunyuan3D-2mv. Three nod
 
 ---
 
+## CUDA Build Prerequisites
+
+Texture generation uses a native CUDA rasterizer compiled for the installed GPU during extension setup. Install these **before** installing or reinstalling the extension:
+
+- An up-to-date NVIDIA display driver
+- The CUDA Toolkit matching the CUDA version selected by the extension's PyTorch wheel (normally CUDA 12.4 for pre-Blackwell GPUs and CUDA 12.8 for newer GPUs)
+- Visual Studio Build Tools with the **Desktop development with C++** workload
+- The Windows SDK included in that workload
+
+The CUDA Toolkit is required to build the rasterizer, not to run it after the build. It may be uninstalled after setup succeeds, but it must be installed again before a future extension reinstall or rebuild. The NVIDIA display driver must remain installed.
+
+If setup reports that `nvcc` or a C++ compiler is missing, install the prerequisites above and reinstall the extension. Setup detects the GPU capability, builds `custom_rasterizer_kernel`, and copies the resulting `.pyd` into the extension's virtual environment.
+
 ## Updating / Installing from GitHub
 
 This repo is the canonical source: `https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.0.1_modly`
 
-1. **Add the extension in Modly's Extensions tab** (paste the repo URL) — Modly downloads it and re-runs `setup.py`, which installs every dependency (torch, hy3dgen, rembg, …) into the isolated venv. No git CLI or manual dependency steps are needed.
-2. **Download the model weights** in the Extensions → model view (per-node **Download** button) — ~15 GB total from public Hugging Face repos.
-3. **Model weights do not need re-downloading on updates** — they already live in Modly's `models/` folder; the first-load bridge links them into place automatically.
+1. **Install the CUDA build prerequisites above.**
+2. **Add the extension in Modly's Extensions tab** (paste the repo URL) — Modly downloads it and re-runs `setup.py`, which installs every dependency (torch, hy3dgen, rembg, …) and compiles the GPU-specific rasterizer into the isolated venv.
+3. **Download the model weights** in the Extensions → model view (per-node **Download** button) — ~15 GB total from public Hugging Face repos.
+4. **Model weights do not need re-downloading on updates** — they already live in Modly's `models/` folder; the first-load bridge links them into place automatically.
 
 For a manual install:
 
@@ -43,7 +58,7 @@ For a manual install:
 pip install https://github.com/iammojogo-sudo/hunyuan3d-2mv-2.0.1_modly/archive/refs/heads/main.zip
 ```
 
-install_requires covers every runtime dependency (use the CUDA torch wheel separately on GPU machines).
+The manual package install also requires the CUDA build prerequisites above when texture generation is needed.
 
 ## Background Removal (rembg)
 
@@ -199,6 +214,9 @@ unwrap tool first.
 - Turn off **Dual Guidance**
 - Set **Texture Resolution** to 512 or lower
 - Set **Delight** to Off (saves ~1.5 GB VRAM)
+
+### "CUDA Toolkit was not found" / rasterizer build failure
+Install the CUDA Toolkit, Visual Studio C++ Build Tools, and the Windows SDK before reinstalling the extension. The rasterizer is compiled during setup and cannot be repaired from a generic prebuilt binary after installation.
 
 ### "No CUDA GPUs are available"
 Kill lingering Python processes in Task Manager and restart Modly. If persistent, your GPU driver may need a reboot.

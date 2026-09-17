@@ -386,7 +386,7 @@ class Hunyuan3DmvGenerator(BaseGenerator):
         The bridge locates them wherever Modly put them (sibling node dirs,
         HF hub cache) and hardlinks them into place, and repairs the venv's
         custom_rasterizer if needed. Fast-path: when .bridge_state.json is
-        already fresh for v2.1.0 AND every known subfolder is present, this is
+        already fresh for v2.2.0 AND every known subfolder is present, this is
         a no-op (no subprocess). Never raises — failures are logged.
         """
         bootstrap = EXT_DIR / "hunyuan3d_bootstrap.py"
@@ -415,7 +415,9 @@ class Hunyuan3DmvGenerator(BaseGenerator):
         if state_file.exists():
             try:
                 _state = json.loads(state_file.read_text(encoding="utf-8"))
-                if _state.get("extension_version") == "2.1.0" and _layout_ready():
+                if (_state.get("extension_version") == "2.2.0"
+                        and _state.get("site_packages_repaired")
+                        and _layout_ready()):
                     return
             except Exception:
                 pass

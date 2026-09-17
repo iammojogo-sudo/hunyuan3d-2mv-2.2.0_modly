@@ -26,13 +26,14 @@ Standard packaging mode (e.g. `pip install .` from the GitHub repo) installs
 every runtime dependency, including hy3dgen from the Tencent source.
 """
 import json
+import os
 import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 
 # Directly imported by the bridges (beyond hy3dgen's own transitive deps).
 RUNTIME_DEPS = [
@@ -70,27 +71,78 @@ def pip(venv: Path, *args: str) -> None:
     subprocess.run([str(pip_exe), *args], check=True)
 
 
-def _install_custom_rasterizer(venv: Path, ext_dir: Path) -> None:
-    """Install the bundled prebuilt custom_rasterizer into the venv.
-
-    The extension ships `custom_rasterizer/` (pure-python package + prebuilt
-    `custom_rasterizer_kernel.cp311-win_amd64.pyd`). Copying that dir into
-    site-packages makes `import custom_rasterizer` and
-    `import custom_rasterizer_kernel` resolve with no compilation step.
-    Non-fatal: if the bundle is missing, texture gen will fail later with a
-    clear import error rather than breaking the whole install.
-    """
-    is_win = platform.system() == "Windows"
-    bundle = ext_dir / "custom_rasterizer"
-    if not bundle.exists():
-        print("[setup] custom_rasterizer bundle not found — skipping (texture gen needs it).")
-        return
-    site_pkgs = venv / ("Lib/site-packages" if is_win else "lib/python*/site-packages")
+def _site_packages(venv: Path, is_win: bool) -> Path:
     if is_win:
-        site_pkgs = venv / "Lib" / "site-packages"
-    else:
-        matches = sorted(site_pkgs.parent.glob("python*/site-packages"))
-        site_pkgs = matches[-1] if matches else site_pkgs
+        return venv / "Lib" / "site-packages"
+    matches = sorted((venv / "lib").glob("python*/site-packages"))
+    return matches[-1] if matches else venv / "lib" / "site-packages"
+
+
+def _nvcc_path() -> str | None:
+    """Return the installed CUDA compiler path, if discoverable."""
+    found = shutil.which("nvcc")
+    if found:
+        return found
+    cuda_path = os.environ.get("CUDA_PATH", "")
+    if cuda_path:
+        candidate = Path(cuda_path) / "bin" / ("nvcc.exe" if platform.system() == "Windows" else "nvcc")
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _build_custom_rasterizer(venv: Path, ext_dir: Path, gpu_sm: int, is_win: bool) -> None:
+    """Build the rasterizer against this venv's torch installation.
+
+    The old release shipped a binary compiled only for sm_89. Building after
+    torch is installed makes the extension match both the user's GPU and the
+    venv's torch/CUDA ABI. The generated binary remains in the extension so
+    the first-load bridge can repair site-packages later.
+    """
+    bundle = ext_dir / "custom_rasterizer"
+    build_setup = bundle / "setup.py"
+    if not build_setup.exists():
+        raise RuntimeError("custom_rasterizer/setup.py is missing from the extension")
+    if gpu_sm <= 0:
+        raise RuntimeError(
+            "Modly did not provide an NVIDIA GPU compute capability (gpu_sm); "
+            "the custom CUDA rasterizer cannot be built."
+        )
+    nvcc = _nvcc_path()
+    if not nvcc:
+        raise RuntimeError(
+            "CUDA Toolkit was not found. Install the CUDA Toolkit and the "
+            "Visual Studio C++ build tools, then reinstall this extension."
+        )
+
+    major, minor = divmod(int(gpu_sm), 10)
+    arch = f"{major}.{minor}+PTX"
+    print(f"[setup] Building custom_rasterizer for compute capability {major}.{minor} ({nvcc})")
+
+    # Force a clean rebuild so changing GPUs or torch/CUDA versions cannot
+    # leave an incompatible in-place binary behind.
+    for artifact in bundle.glob("custom_rasterizer_kernel*.pyd"):
+        artifact.unlink()
+    build_dir = bundle / "build"
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+
+    py = venv / ("Scripts/python.exe" if is_win else "bin/python")
+    env = os.environ.copy()
+    env["TORCH_CUDA_ARCH_LIST"] = arch
+    env["CUDA_HOME"] = str(Path(nvcc).resolve().parent.parent)
+    subprocess.run(
+        [str(py), "setup.py", "build_ext", "--inplace"],
+        cwd=str(bundle),
+        env=env,
+        check=True,
+    )
+
+    built = sorted(bundle.glob("custom_rasterizer_kernel*.pyd"))
+    if not built:
+        raise RuntimeError("custom_rasterizer build completed without producing a .pyd")
+
+    site_pkgs = _site_packages(venv, is_win)
 
     dest = site_pkgs / "custom_rasterizer"
     if dest.exists():
@@ -132,8 +184,8 @@ def _torch_index_and_pkgs(gpu_sm: int, cuda_version: int, torch_flavor: str, is_
         return "https://download.pytorch.org/whl/cu128", ["torch==2.7.0", "torchvision==0.22.0", "torchaudio==2.7.0"]
     if gpu_sm >= 70:
         return "https://download.pytorch.org/whl/cu124", ["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"]
-    # The prebuilt custom_rasterizer_kernel .pyd needs cudart64_12.dll (CUDA 12)
-    # at minimum, so always use cu124 on Windows even for older/unknown GPUs.
+    # The CUDA extension is built against the torch wheel after installation.
+    # Keep CUDA 12 on Windows for the available torch/CUDA build combination.
     if is_win:
         return "https://download.pytorch.org/whl/cu124", ["torch==2.6.0", "torchvision==0.21.0", "torchaudio==2.6.0"]
     return "https://download.pytorch.org/whl/cu118", ["torch==2.5.1", "torchvision==0.20.1", "torchaudio==2.5.1"]
@@ -193,17 +245,12 @@ def setup(
     # Warm rembg's U²-Net cache (~170 MB) so first runs work offline.
     _predownload_rembg(venv)
 
-    # ------------------------------------------------------------------ #
-    # custom_rasterizer (texture gen) — install the PREBUILT kernel that
-    # ships with this extension. hy3dgen's texgen imports `custom_rasterizer`
-    # (a pure-python package) which in turn imports the compiled
-    # `custom_rasterizer_kernel` CUDA extension. We bundle both (the package
-    # source + the prebuilt .pyd for CPython 3.11) under this extension dir and
-    # copy them into site-packages so `import custom_rasterizer` resolves with
-    # NO compiler / CUDA toolkit needed at install time. Shape generation does
-    # not need this; only the texture (paint) node does.
-    # ------------------------------------------------------------------ #
-    _install_custom_rasterizer(venv, ext_dir)
+    # Build the texture renderer for this machine after torch is installed.
+    # Texture generation needs this; shape generation does not.
+    if accelerator == "cuda":
+        _build_custom_rasterizer(venv, ext_dir, gpu_sm, is_win)
+    else:
+        print("[setup] Non-CUDA accelerator: skipping custom_rasterizer build (texture needs NVIDIA CUDA).")
 
     print("[setup] Done. Venv ready at:", venv)
     print("[setup] Model weights are installed via Modly's model-download step.")

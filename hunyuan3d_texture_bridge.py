@@ -6,8 +6,8 @@ import threading
 import time
 from pathlib import Path
 
-# Register torch's DLL directory so custom_rasterizer_kernel (a prebuilt CUDA
-# extension) can find cudart64_12.dll and other native libs at import time.
+# Register torch's DLL directory so custom_rasterizer_kernel (the locally built
+# CUDA extension) can find cudart64_12.dll and other native libs at import time.
 try:
     _torch_lib = str(Path(sys.executable).resolve().parent.parent / "Lib" / "site-packages" / "torch" / "lib")
     if os.path.isdir(_torch_lib):

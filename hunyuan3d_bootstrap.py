@@ -1,4 +1,4 @@
-"""Hunyuan3D-2mv — first-load bridge (v2.1.1).
+"""Hunyuan3D-2mv — first-load bridge (v2.2.0).
 
 This module is the SINGLE place where anything living OUTSIDE the extension
 directory gets patched / bridged into shape. It runs inside the extension venv
@@ -28,10 +28,9 @@ What it does (all idempotent, all non-fatal):
       run is fully offline. Hardlinks are instant and use zero extra disk.
 
   * repair_site_packages()
-      The venv's site-packages lives outside the extension dir. If the bundled
-      prebuilt custom_rasterizer CUDA kernel is missing there (or the venv was
-      rebuilt), it is re-copied from the extension bundle so texture gen's
-      `import custom_rasterizer` resolves with no compiler needed.
+      The venv's site-packages lives outside the extension dir. If the
+      machine-specific custom_rasterizer CUDA kernel is missing there (or the
+      venv was rebuilt), it is re-copied from the extension bundle and tested.
 
   * state file (ext_dir/.bridge_state.json)
       Records extension_version + what was bridged/repaired per node, so later
@@ -54,7 +53,7 @@ import sys
 import time
 from pathlib import Path
 
-EXTENSION_VERSION = "2.1.1"
+EXTENSION_VERSION = "2.2.0"
 STATE_FILE = ".bridge_state.json"
 
 # subfolders each node needs, relative to that node's model dir
@@ -246,17 +245,42 @@ def _site_packages(ext_dir):
 
 
 def _kernel_import_ok():
-    """custom_rasterizer_kernel requires torch's DLLs on the search path, so
-    import torch first (exactly like hy3dgen does at runtime).
+    """Import and launch a tiny rasterizer kernel smoke test.
+
+    Importing a CUDA extension does not verify that its cubin targets the
+    active GPU. The launch catches the ``no kernel image`` failure during the
+    bridge instead of after the paint models have loaded.
 
     Returns (ok, error_message_or_None)."""
     try:
-        import torch  # noqa: F401
+        import torch
         import custom_rasterizer  # noqa: F401
         import custom_rasterizer_kernel  # noqa: F401
+        if not torch.cuda.is_available():
+            return True, None
+
+        capability = torch.cuda.get_device_capability()
+        device_name = torch.cuda.get_device_name()
+        device = torch.device("cuda")
+        vertices = torch.tensor(
+            [[-0.75, -0.75, 0.0, 1.0], [0.75, -0.75, 0.0, 1.0],
+             [0.0, 0.75, 0.0, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+        faces = torch.tensor([[0, 1, 2]], dtype=torch.int32, device=device)
+        depth = torch.empty(0, dtype=torch.float32, device=device)
+        custom_rasterizer_kernel.rasterize_image(
+            vertices, faces, depth, 4, 4, 1e-6, 0
+        )
+        torch.cuda.synchronize()
         return True, None
     except Exception as e:
-        return False, str(e)
+        try:
+            detail = f"GPU {device_name} compute capability {capability[0]}.{capability[1]}"
+        except Exception:
+            detail = "active CUDA GPU"
+        return False, f"{detail}: {e}"
 
 
 def repair_site_packages(ext_dir):
@@ -270,10 +294,14 @@ def repair_site_packages(ext_dir):
     ok, err = _kernel_import_ok()
     if ok:
         return True
-    _log(f"[bridge] custom_rasterizer import check failed: {err}")
+    _log(f"[bridge] custom_rasterizer validation failed: {err}")
     if not bundle.is_dir():
         _log("[bridge] custom_rasterizer bundle missing from extension dir — "
-             "texture gen needs it (re-download the extension)")
+             "texture gen needs it (reinstall with CUDA Toolkit installed)")
+        return False
+    if not list(bundle.glob("custom_rasterizer_kernel*.pyd")):
+        _log("[bridge] machine-specific custom_rasterizer .pyd is missing — "
+             "reinstall the extension with CUDA Toolkit and MSVC build tools installed")
         return False
     dest = sp / "custom_rasterizer"
     try:
@@ -288,9 +316,9 @@ def repair_site_packages(ext_dir):
         return False
     ok, err = _kernel_import_ok()
     if ok:
-        _log("[bridge] custom_rasterizer import OK after repair")
+        _log("[bridge] custom_rasterizer validation OK after repair")
         return True
-    _log(f"[bridge] custom_rasterizer still failing to import: {err}")
+    _log(f"[bridge] custom_rasterizer still failing validation: {err}")
     return False
 
 
@@ -315,7 +343,9 @@ def ensure_bridged(args):
     if not isinstance(state, dict):
         state = {}
 
-    if state.get("extension_version") == EXTENSION_VERSION and not force:
+    if (state.get("extension_version") == EXTENSION_VERSION
+            and state.get("site_packages_repaired")
+            and not force):
         # Fast path: everything was already bridged for this build.
         _log(f"[bridge] already bridged (v{EXTENSION_VERSION}) — nothing to do")
         return state
